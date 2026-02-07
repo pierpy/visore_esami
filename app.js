@@ -40,6 +40,7 @@ const GOOGLE_CLOUD_VISION_API_KEY = "AIzaSyCxhmbjJtOxzBa13B2L0Xc5YT9CorcKopw";
 
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
+const storage = firebase.storage(); // <--- NUOVO: Inizializziamo lo Storage
 const { ref, reactive, onMounted, computed } = Vue;
 const { exportFile, useQuasar } = Quasar; 
 
@@ -57,30 +58,24 @@ const app = Vue.createApp({
 
         // Dialoghi
         const dialogNuovoCorso = ref(false);
-        const dialogStudente = ref(false); // Unico dialogo per Crea/Modifica/Scan
+        const dialogStudente = ref(false);
+        const dialogFotoProva = ref(false); // <--- NUOVO: Dialogo per vedere la foto salvata
+        const fotoProvaUrl = ref('');       // <--- NUOVO: URL della foto da mostrare
         
         const nuovoCorso = reactive({ nome: '' });
         
-        // Form unico per lo studente (usato sia da OCR che manuale)
         const studenteForm = reactive({ 
-            id: null, // Se c'è ID è una modifica, se null è nuovo
+            id: null, 
             matricola: '', 
             nome: '', 
             cognome: '', 
-            voto: '' 
+            voto: '',
+            foto_url: '' // <--- NUOVO: Qui salveremo il link della foto
         });
         
-        const anteprimaImg = ref(''); // Solo per quando scannerizziamo
+        const anteprimaImg = ref(''); // Foto temporanea (appena scattata)
 
-        const colonneStudenti = [
-            { name: 'matricola', label: 'Matricola', field: 'matricola', align: 'left', sortable: true },
-            { name: 'cognome', label: 'Cognome', field: 'cognome', align: 'left', sortable: true },
-            { name: 'nome', label: 'Nome', field: 'nome', align: 'left', sortable: true }, // NUOVO
-            { name: 'voto', label: 'Voto', field: 'voto', sortable: true, style: 'font-weight: bold' },
-            { name: 'actions', label: '', field: 'actions', align: 'right' }
-        ];
-
-        // --- STATISTICHE ---
+        // --- CALCOLO STATISTICHE ---
         const statistiche = computed(() => {
             const tot = listaStudenti.value.length;
             if (tot === 0) return { media: 0, promossi: 0, bocciati: 0, totale: 0 };
@@ -95,7 +90,6 @@ const app = Vue.createApp({
             };
         });
 
-        // --- FILTRO RICERCA ---
         const studentiFiltrati = computed(() => {
             if (!testoRicerca.value) return listaStudenti.value;
             const search = testoRicerca.value.toLowerCase();
@@ -106,95 +100,116 @@ const app = Vue.createApp({
             );
         });
 
-        // --- EXPORT EXCEL ---
         const scaricaExcel = () => {
             if (listaStudenti.value.length === 0) return;
-            let csvContent = "Matricola;Cognome;Nome;Voto;Data\n";
+            let csvContent = "Matricola;Cognome;Nome;Voto;Data;Link Prova\n";
             listaStudenti.value.forEach(row => {
                 let dataStr = row.data_scansione && row.data_scansione.toDate ? row.data_scansione.toDate().toLocaleDateString() : "";
-                csvContent += `${row.matricola};${row.cognome || ''};${row.nome || ''};${row.voto};${dataStr}\n`;
+                // Aggiungiamo anche il link della foto nell'Excel
+                csvContent += `${row.matricola};${row.cognome || ''};${row.nome || ''};${row.voto};${dataStr};${row.foto_url || ''}\n`;
             });
             const status = exportFile('esami_export.csv', csvContent, 'text/csv');
             if (!status) $q.notify({ message: 'Download bloccato', color: 'negative' });
         };
 
-        // --- LOGICA STUDENTI (NUOVA) ---
+        // --- LOGICA ---
 
-        // 1. Apre il form vuoto per inserimento manuale
         const apriInserimentoManuale = () => {
             studenteForm.id = null;
             studenteForm.matricola = '';
             studenteForm.nome = '';
             studenteForm.cognome = '';
             studenteForm.voto = '';
-            anteprimaImg.value = ''; // Nessuna foto
+            studenteForm.foto_url = '';
+            anteprimaImg.value = ''; 
             dialogStudente.value = true;
         };
 
-        // 2. Apre il form precompilato per la modifica
         const modificaStudente = (row) => {
             studenteForm.id = row.id;
             studenteForm.matricola = row.matricola;
             studenteForm.nome = row.nome || '';
             studenteForm.cognome = row.cognome || '';
             studenteForm.voto = row.voto;
-            anteprimaImg.value = ''; // In modifica non mostriamo la vecchia foto per semplicità
+            studenteForm.foto_url = row.foto_url || ''; // Carichiamo il link esistente
+            anteprimaImg.value = ''; 
             dialogStudente.value = true;
         };
 
-        // 3. Salva (Gestisce sia CREAZIONE che MODIFICA)
+        const mostraFotoProva = (url) => {
+            fotoProvaUrl.value = url;
+            dialogFotoProva.value = true;
+        };
+
+        // --- SALVATAGGIO CON UPLOAD FOTO ---
         const salvaStudenteDB = async () => {
             if(!studenteForm.matricola || !studenteForm.voto) {
-                $q.notify({ type: 'warning', message: 'Matricola e Voto sono obbligatori!' });
+                $q.notify({ type: 'warning', message: 'Dati obbligatori mancanti!' });
                 return;
             }
 
-            const datiDaSalvare = {
-                corso_id: corsoSelezionato.value.id,
-                matricola: studenteForm.matricola,
-                nome: studenteForm.nome,
-                cognome: studenteForm.cognome,
-                voto: parseInt(studenteForm.voto),
-                data_scansione: new Date() // Aggiorna la data all'ultima modifica
-            };
+            $q.loading.show({ message: 'Salvataggio e upload foto...' });
 
-            loading.value = true;
             try {
-                if (studenteForm.id) {
-                    // MODIFICA ESISTENTE
-                    await db.collection('studenti').doc(studenteForm.id).update(datiDaSalvare);
-                    $q.notify({ type: 'positive', message: 'Studente aggiornato!' });
-                } else {
-                    // CREA NUOVO
-                    await db.collection('studenti').add(datiDaSalvare);
-                    $q.notify({ type: 'positive', message: 'Studente aggiunto!' });
+                let downloadURL = studenteForm.foto_url; // Mantiene quella vecchia se c'è
+
+                // SE C'È UNA NUOVA FOTO SCATTATA (anteprimaImg piena), LA CARICHIAMO
+                if (anteprimaImg.value && anteprimaImg.value.startsWith('data:image')) {
+                    // 1. Crea nome file unico
+                    const nomeFile = `prove_esame/${new Date().getTime()}_${studenteForm.matricola}.jpg`;
+                    const storageRef = storage.ref().child(nomeFile);
+                    
+                    // 2. Carica la stringa Base64 (togliendo l'intestazione data:image...)
+                    const rawBase64 = anteprimaImg.value.split(',')[1];
+                    await storageRef.putString(rawBase64, 'base64');
+                    
+                    // 3. Ottieni il link pubblico
+                    downloadURL = await storageRef.getDownloadURL();
                 }
+
+                const datiDaSalvare = {
+                    corso_id: corsoSelezionato.value.id,
+                    matricola: studenteForm.matricola,
+                    nome: studenteForm.nome,
+                    cognome: studenteForm.cognome,
+                    voto: parseInt(studenteForm.voto),
+                    data_scansione: new Date(),
+                    foto_url: downloadURL // Salviamo il link nel database
+                };
+
+                if (studenteForm.id) {
+                    await db.collection('studenti').doc(studenteForm.id).update(datiDaSalvare);
+                    $q.notify({ type: 'positive', message: 'Aggiornato!' });
+                } else {
+                    await db.collection('studenti').add(datiDaSalvare);
+                    $q.notify({ type: 'positive', message: 'Salvato con prova!' });
+                }
+                
                 dialogStudente.value = false;
-                apriCorso(corsoSelezionato.value); // Ricarica lista
+                apriCorso(corsoSelezionato.value); 
             } catch (e) {
                 console.error(e);
-                $q.notify({ type: 'negative', message: 'Errore salvataggio' });
+                $q.notify({ type: 'negative', message: 'Errore upload: ' + e.message });
+            } finally {
+                $q.loading.hide();
             }
-            loading.value = false;
         };
 
-        // --- GESTIONE FOTOCAMERA ---
         const attivaCamera = () => document.getElementById('cameraInput').click();
 
         const processaImmagine = async (event) => {
             const file = event.target.files[0];
             if (!file) return;
 
-            $q.loading.show({ message: 'Analisi IA in corso...' });
+            $q.loading.show({ message: 'Analisi IA...' });
 
             try {
                 const base64 = await toBase64(file);
-                // Resettiamo il form prima di riempirlo
-                studenteForm.id = null; // È un nuovo inserimento
+                studenteForm.id = null; 
                 studenteForm.nome = '';
                 studenteForm.cognome = '';
+                studenteForm.foto_url = ''; // Reset
                 
-                // Mostriamo anteprima nel dialog
                 anteprimaImg.value = "data:image/jpeg;base64," + base64;
 
                 const url = `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_CLOUD_VISION_API_KEY}`;
@@ -204,9 +219,7 @@ const app = Vue.createApp({
                 if (!response.ok) throw new Error("Errore API Google");
 
                 const data = await response.json();
-                if (!data.responses || !data.responses[0].fullTextAnnotation) {
-                    throw new Error("Nessun testo trovato.");
-                }
+                if (!data.responses || !data.responses[0].fullTextAnnotation) throw new Error("Nessun testo trovato.");
                 
                 const fullText = data.responses[0].fullTextAnnotation.text;
                 const clean = fullText.replace(/\|/g, '').replace(/_/g, '');
@@ -217,7 +230,6 @@ const app = Vue.createApp({
                 studenteForm.matricola = matricolaMatch ? matricolaMatch[0] : '';
                 studenteForm.voto = votoMatch ? votoMatch[0] : '';
                 
-                // Apriamo lo stesso dialog usato per l'inserimento manuale, ma con i dati precompilati e la foto
                 dialogStudente.value = true;
 
             } catch (e) {
@@ -228,7 +240,7 @@ const app = Vue.createApp({
             }
         };
 
-        // --- ALTRE FUNZIONI (Corsi, Delete, ecc.) ---
+        // --- ALTRE FUNZIONI ---
         const caricaCorsi = async () => {
             loading.value = true;
             try {
@@ -286,11 +298,12 @@ const app = Vue.createApp({
 
         return {
             vistaCorrente, loading, listaCorsi, listaStudenti, corsoSelezionato,
-            dialogNuovoCorso, dialogStudente, nuovoCorso, studenteForm, anteprimaImg, colonneStudenti,
+            dialogNuovoCorso, dialogStudente, dialogFotoProva, fotoProvaUrl, // <--- Esposti
+            nuovoCorso, studenteForm, anteprimaImg,
             statistiche, studentiFiltrati, testoRicerca, scaricaExcel,
             caricaCorsi, salvaCorso, eliminaCorso, apriCorso, tornaHome,
             attivaCamera, processaImmagine, salvaStudenteDB, eliminaStudente,
-            apriInserimentoManuale, modificaStudente, // Nuove funzioni esposte
+            apriInserimentoManuale, modificaStudente, mostraFotoProva,
             titoloApp: computed(() => vistaCorrente.value === 'home' ? 'I Miei Corsi' : corsoSelezionato.value.nome)
         };
     }
