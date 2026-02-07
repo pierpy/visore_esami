@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Prof Manager</title>
+    <link href="https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900|Material+Icons" rel="stylesheet" type="text/css">
+    <link href="https://cdn.jsdelivr.net/npm/quasar@2.14.1/dist/quasar.prod.css" rel="stylesheet" type="text/css">
+    <style>
+        /* Piccoli aggiustamenti custom */
+        .my-card { margin-bottom: 15px; border-left: 5px solid #1976D2; }
+    </style>
+</head>
+<body>
+    <div id="q-app">
+        <q-layout view="lHh Lpr lFf" class="bg-grey-1">
+            
+            <q-header elevated class="bg-primary text-white">
+                <q-toolbar>
+                    <q-btn flat round dense icon="arrow_back" v-if="vistaCorrente === 'dettaglio'" @click="tornaHome"></q-btn>
+                    <q-toolbar-title>{{ titoloApp }}</q-toolbar-title>
+                    <q-btn flat round dense icon="add" v-if="vistaCorrente === 'home'" @click="dialogNuovoCorso = true"></q-btn>
+                </q-toolbar>
+            </q-header>
+
+            <q-page-container>
+                <q-page class="q-pa-md">
+                    
+                    <div v-show="vistaCorrente === 'home'">
+                        <div v-if="loading" class="text-center q-mt-xl"><q-spinner size="3em" color="primary"></q-spinner></div>
+                        
+                        <div v-else>
+                            <q-banner v-if="listaCorsi.length === 0" class="bg-blue-1 q-mb-md rounded-borders">
+                                Nessun corso presente. Clicca "+" in alto a destra.
+                            </q-banner>
+
+                            <q-card v-for="corso in listaCorsi" :key="corso.id" class="my-card" v-ripple @click="apriCorso(corso)">
+                                <q-card-section class="row items-center justify-between">
+                                    <div>
+                                        <div class="text-h6">{{ corso.nome }}</div>
+                                        <div class="text-caption text-grey">{{ corso.data }}</div>
+                                    </div>
+                                    <q-btn flat round color="red" icon="delete" @click.stop="eliminaCorso(corso.id)"></q-btn>
+                                </q-card-section>
+                            </q-card>
+                        </div>
+                    </div>
+
+                    <div v-show="vistaCorrente === 'dettaglio'">
+                        <div class="row q-mb-md">
+                            <q-btn color="secondary" class="full-width" icon="camera_alt" label="SCANSIONA COMPITO" size="lg" @click="attivaCamera"></q-btn>
+                            <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none" @change="processaImmagine">
+                        </div>
+
+                        <q-table
+                            :title="'Studenti (' + listaStudenti.length + ')'"
+                            :rows="listaStudenti"
+                            :columns="colonneStudenti"
+                            row-key="id"
+                            no-data-label="Nessun dato. Scansiona il primo compito!"
+                            :pagination="{ rowsPerPage: 0 }"
+                        >
+                            <template v-slot:body-cell-actions="props">
+                                <q-td :props="props" auto-width>
+                                    <q-btn flat round dense color="red" icon="delete" @click="eliminaStudente(props.row.id)"></q-btn>
+                                </q-td>
+                            </template>
+                        </q-table>
+                    </div>
+
+                </q-page>
+            </q-page-container>
+
+            <q-dialog v-model="dialogNuovoCorso">
+                <q-card style="min-width: 300px">
+                    <q-card-section><div class="text-h6">Crea Corso</div></q-card-section>
+                    <q-card-section>
+                        <q-input filled v-model="nuovoCorso.nome" label="Nome Materia" autofocus></q-input>
+                    </q-card-section>
+                    <q-card-actions align="right">
+                        <q-btn flat label="Annulla" v-close-popup></q-btn>
+                        <q-btn flat label="Salva" color="primary" @click="salvaCorso" v-close-popup></q-btn>
+                    </q-card-actions>
+                </q-card>
+            </q-dialog>
+
+            <q-dialog v-model="dialogScansione" persistent>
+                <q-card style="width: 100vw">
+                    <q-card-section class="bg-primary text-white">
+                        <div class="text-h6">Verifica Dati</div>
+                    </q-card-section>
+
+                    <q-card-section>
+                        <img :src="anteprimaImg" style="width:100%; height: 150px; object-fit: contain; background: #000;">
+                        <div class="q-mt-md">
+                            <q-input outlined v-model="scansioneTemp.matricola" label="Matricola" type="number" class="q-mb-sm"></q-input>
+                            <q-input outlined v-model="scansioneTemp.voto" label="Voto" type="number" class="q-mb-sm bg-yellow-1"></q-input>
+                            <q-input outlined v-model="scansioneTemp.cognome" label="Cognome (Opzionale)"></q-input>
+                        </div>
+                    </q-card-section>
+
+                    <q-card-actions align="right">
+                        <q-btn flat label="Scarta" color="red" v-close-popup></q-btn>
+                        <q-btn unelevated label="ARCHIVIA" color="green" size="lg" @click="salvaScansioneDB" v-close-popup></q-btn>
+                    </q-card-actions>
+                </q-card>
+            </q-dialog>
+
+        </q-layout>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/quasar@2.14.1/dist/quasar.umd.prod.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore-compat.js"></script>
+    
+    <script src="app.js"></script>
+</body>
+</html>
